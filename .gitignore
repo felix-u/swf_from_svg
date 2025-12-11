@@ -1,0 +1,8 @@
+.DS_Store
+build/
+*.obj
+*.pdb
+*.exe
+*.bin
+*.raddbg
+*.rdi
