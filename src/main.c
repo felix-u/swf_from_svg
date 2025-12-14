@@ -2,12 +2,12 @@
 // https://ruffle.rs/demo/
 // https://www.w3.org/TR/SVG2/
 
+#define XML_IMPLEMENTATION
+#include "xml.h"
+
 #define PLATFORM_NONE 1
 #define BASE_IMPLEMENTATION
 #include "base/base.h"
-
-#define XML_IMPLEMENTATION 1
-#include "xml.h"
 
 static void program(void) {
     Arena arena = arena_init(8 * 1024 * 1024);
@@ -31,7 +31,7 @@ static void program(void) {
 
     xml_Value key = {0}, value = {0};
     while (xml_read(&r, &key, &value)) {
-        
+
     }
     assert(r.error == xml_Error_OK);
 

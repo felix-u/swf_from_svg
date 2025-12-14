@@ -78,10 +78,10 @@ static _Bool xml__over_symbol(xml_Reader *r) {
 }
 
 _Bool xml_read(xml_Reader *r, xml_Value *key, xml_Value *value) {
-    // _Bool can_go_to_open = key->type == xml_Type_TAG_CLOSE || key->type == xml_Type_TAG_OPEN || key->type == xml_Type_ATTRIBUTE;
-    // _Bool can_go_to_close = can_go_to_open;
-    // _Bool can_go_to_attribute = key->type == xml_Type_TAG_OPEN || key->type == xml_Type_ATTRIBUTE
     if (!xml__skip_whitespace(r)) return 0;
+
+    static const char *key_start_backup_for_self_closing;
+    static const char *key_end_backup_for_self_closing;
 
     switch (key->type) {
         case xml_Type_TAG_OPEN: case xml_Type_ATTRIBUTE: {
@@ -108,7 +108,9 @@ _Bool xml_read(xml_Reader *r, xml_Value *key, xml_Value *value) {
 
             _Bool self_closing = *r->c == '/';
             if (self_closing) {
-                // TODO(felix): set key start and end by backtracking
+                key->start = key_start_backup_for_self_closing;
+                key->end = key_end_backup_for_self_closing;
+
                 key->type = xml_Type_TAG_CLOSE;
 
                 r->depth -= 1;
@@ -151,6 +153,9 @@ _Bool xml_read(xml_Reader *r, xml_Value *key, xml_Value *value) {
             key->start = r->c;
             if (!xml__over_symbol(r)) break;
             key->end = r->c;
+
+            key_start_backup_for_self_closing = key->start;
+            key_end_backup_for_self_closing = key->end;
 
             key->type = closing ? xml_Type_TAG_CLOSE : xml_Type_TAG_OPEN;
             r->depth += !closing - closing;
