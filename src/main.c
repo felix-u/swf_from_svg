@@ -6,6 +6,9 @@
 #define BASE_IMPLEMENTATION
 #include "base/base.h"
 
+#define XML_IMPLEMENTATION 1
+#include "xml.h"
+
 static void program(void) {
     Arena arena = arena_init(8 * 1024 * 1024);
 
@@ -24,21 +27,32 @@ static void program(void) {
         os_exit(1);
     }
 
-    String swf_header = string_print(&arena,
-        "F" // uncompressed
-        "WS"
-        "\x13" // single-byte version (19)
-        "\0\0\0\x10" // [u32] length of file in bytes, including this header
-        "\0\0\0\0" // [RECT] frame size
-        "\0\0" // [u16] framerate
-        "\0\x01" // [u16] frame count
-    );
-    String swf = swf_header; // TODO(felix)
-    
+    xml_Reader r = xml_reader((const char *)svg.data, (int)svg.count);
+
+    xml_Value key = {0}, value = {0};
+    while (xml_read(&r, &key, &value)) {
+        
+    }
+    assert(r.error == xml_Error_OK);
+
+    discard swf_path;
+
+    // String swf_header = string_print(&arena,
+    //     "F" // uncompressed
+    //     "WS"
+    //     "\x13" // single-byte version (19)
+    //     "\0\0\0\x10" // [u32] length of file in bytes, including this header
+    //     "\0\0\0\0" // [RECT] frame size
+    //     "\0\0" // [u16] framerate
+    //     "\0\x01" // [u16] frame count
+    // );
+    // String swf = swf_header; // TODO(felix)
+
     // u8 *swf_length_in_header = &swf_header.data[4];
     // for (u64 i = 0; i < 4; i += 1)
     //     swf_length_in_header[i] = (u8)(swf.count >> (3 - i));
 
-    bool ok = os_write_entire_file(cstring_from_string(&arena, swf_path), swf);
-    if (!ok) os_exit(1);
+    // bool ok = os_write_entire_file(cstring_from_string(&arena, swf_path), swf);
+    // if (!ok) os_exit(1);
+
 }
