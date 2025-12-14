@@ -9,6 +9,14 @@
 #define BASE_IMPLEMENTATION
 #include "base/base.h"
 
+static String string_from_xml(xml_Value value) {
+    String result = {
+        .data = (u8 *)value.start,
+        .count = (u64)(value.end - value.start),
+    };
+    return result;
+}
+
 static void program(void) {
     Arena arena = arena_init(8 * 1024 * 1024);
 
@@ -31,7 +39,15 @@ static void program(void) {
 
     xml_Value key = {0}, value = {0};
     while (xml_read(&r, &key, &value)) {
+        String key_string = string_from_xml(key);
+        String value_string = string_from_xml(value);
 
+        for (int i = 0; i < r.depth + (key.type == xml_Type_TAG_CLOSE); i += 1) print("\t");
+
+        if (key.type == xml_Type_TAG_OPEN) print("OPEN ");
+        else if (key.type == xml_Type_TAG_CLOSE) print("CLOSE ");
+
+        print("%S %S\n", key_string, value_string);
     }
     assert(r.error == xml_Error_OK);
 

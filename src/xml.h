@@ -110,8 +110,9 @@ _Bool xml_read(xml_Reader *r, xml_Value *key, xml_Value *value) {
             if (self_closing) {
                 key->start = key_start_backup_for_self_closing;
                 key->end = key_end_backup_for_self_closing;
-
                 key->type = xml_Type_TAG_CLOSE;
+
+                *value = (xml_Value){0};
 
                 r->depth -= 1;
                 r->c += 1;
@@ -126,6 +127,7 @@ _Bool xml_read(xml_Reader *r, xml_Value *key, xml_Value *value) {
                 if (!xml__skip_whitespace(r)) break;
 
                 if (!xml__to_char(r, '<')) {
+                    *key = *value = (xml_Value){0};
                     key->type = value->type = xml_Type_END;
 
                     if (r->depth < 0) {
@@ -159,10 +161,12 @@ _Bool xml_read(xml_Reader *r, xml_Value *key, xml_Value *value) {
 
             key->type = closing ? xml_Type_TAG_CLOSE : xml_Type_TAG_OPEN;
             r->depth += !closing - closing;
+            *value = (xml_Value){0};
             return 1;
         } break;
     }
 
+    *key = *value = (xml_Value){0};
     key->type = value->type = xml_Type_ERROR;
     if (r->error == xml_Error_OK) r->error = xml_Error_SYNTAX;
     return 0;
