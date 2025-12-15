@@ -66,7 +66,8 @@ structdef(SVG_Part) {
             V2 centre, radius;
         } ellipse;
         struct {
-            V2 position, size;
+            using(V2, position);
+            V2 size;
         } rect;
     };
 };
@@ -77,6 +78,10 @@ static bool xml_read_with_strings(xml_Reader *r, xml_Value *key, xml_Value *valu
     *value_string = string_from_xml(*value);
     return result;
 }
+
+typedef enum SWF_Tag_Type {
+    SWF_Tag_Type_DEFINESHAPE3 = 32,
+} SWF_Tag_Type;
 
 static void svg_part_parse_style(SVG_Part *part, String style) {
     {
@@ -119,6 +124,79 @@ static void svg_part_parse_style(SVG_Part *part, String style) {
 
         part->stroke_width = (f32)f64_from_string(stroke_width_string);
     }
+}
+
+typedef u16 SWF_Record_Header;
+
+static void swf_write_u16(String_Builder *swf, u16 value) {
+    push(swf, (u8)value);
+    push(swf, (u8)(value >> 8));
+}
+
+structdef(SWF_Fill_Style) {
+    u8 type;
+    u32 color;
+};
+
+structdef(SWF_Line_Style) {
+    u16 width_twips;
+    u32 color;
+};
+
+structdef(SWF_Shape_With_Style) {
+    SWF_Fill_Style fill_style;
+    SWF_Line_Style line_style;
+};
+
+static void swf_push_shapewithstyle(String_Builder *swf, SWF_Shape_With_Style shapes, SVG_Part part) {
+    // FILLSTYLEARRAY
+    push(swf, 1); // count
+    { // FILLSTYLE
+        assert(shapes.fill_style.type == 0); // solid
+        push(swf, shapes.fill_style.type);
+
+        u32 rbga = shapes.fill_style.color;
+        push(swf, (u8)(rgba >> 24));
+        push(swf, (u8)(rgba >> 16));
+        push(swf, (u8)(rgba >> 8));
+        push(swf, (u8)(rgba >> 0));
+    }
+
+    // LINESTYLEARRAY
+    push(swf, 1); // count
+    {
+        swf_write_u16(swf, shapes.line_style.width_twips);
+        u32 rbga = shapes.line_style.color;
+        push(swf, (u8)(rgba >> 24));
+        push(swf, (u8)(rgba >> 16));
+        push(swf, (u8)(rgba >> 8));
+        push(swf, (u8)(rgba >> 0));
+    }
+
+    push(swf, 0x11); // NumFillBits = 1, NumLineBits = 1
+
+    assert(part.type == SVG_Part_Type_RECT);
+
+    // TODO(felix): StyleChangeRecord: select fill & line styles, move to x0,y0
+
+    // TODO(felix): 4 StraightEdgeRecord s: to x1,y0, then x1,y1, then x0,y1, then back to x0,y0
+
+    // TODO(felix): EndShapeRecord
+}
+
+static void swf_push_defineshape3(String_Builder *swf, u16 shape_id, SWF_Rect shape_bounds, SWF_Shape_With_Style shapes) {
+    u16 length = sizeof shape_id + sizeof shape_bounds.bytes + sizeof shapes;
+    assert(length < 0x3f);
+    u16 tag_code_and_length = (SWF_Tag_Type_DEFINESHAPE3 << 6) | length;
+    swf_write_u16(swf, tag_code_and_length);
+
+    swf_write_u16(swf, shape_id);
+
+    for (u64 i = 0; i < sizeof shape_bounds.bytes; i += 1) {
+        push(swf, shape_bounds.bytes[i]);
+    }
+
+    swf_push_shapewithstyle(swf, shapes);
 }
 
 static void program(void) {
@@ -182,6 +260,7 @@ static void program(void) {
             switch (svg_kind) {
                 case 'p': {
                     part.kind = SVG_Part_Kind_PATH;
+
                     while (xml_read_with_strings(&r, &key, &value, &key_string, &value_string)) {
                         if (key.type == xml_Type_TAG_CLOSE) break;
 
@@ -192,11 +271,7 @@ static void program(void) {
                 } break;
                 case 'e': {
                     part.kind = SVG_Part_Kind_ELLIPSE;
-
-                    String cx_string = {0};
-                    String cy_string = {0};
-                    String rx_string = {0};
-                    String ry_string = {0};
+                    String cx_string = {0}, cy_string = {0}, rx_string = {0}, ry_string = {0};
 
                     while (xml_read_with_strings(&r, &key, &value, &key_string, &value_string)) {
                         if (key.type == xml_Type_TAG_CLOSE) break;
@@ -214,11 +289,7 @@ static void program(void) {
                 } break;
                 case 'r': {
                     part.kind = SVG_Part_Kind_RECT;
-
-                    String width_string = {0};
-                    String height_string = {0};
-                    String x_string = {0};
-                    String y_string = {0};
+                    String width_string = {0}, height_string = {0}, x_string = {0}, y_string = {0};
 
                     while (xml_read_with_strings(&r, &key, &value, &key_string, &value_string)) {
                         if (key.type == xml_Type_TAG_CLOSE) break;
@@ -255,10 +326,32 @@ static void program(void) {
     u8 *swf_length_in_header = &swf.data[4];
     u8 *frame_size_rect_in_header = &swf.data[8];
 
-    for (u64 i = 0; i < 4; i += 1) swf_length_in_header[i] = (u8)(swf.count >> (8 * i));
-
     SWF_Rect frame_size = swf_rect(0, twips_from_pixels(svg_width), 0, twips_from_pixels(svg_height));
     memcpy(frame_size_rect_in_header, frame_size.bytes, sizeof frame_size.bytes);
+
+    for (u64 i = 0; i < svg_parts.count; i += 1) {
+        SVG_Part *part = &svg_parts.data[i];
+
+        switch (part->kind) {
+            case SVG_Part_Kind_PATH: {
+                log_info("TODO(felix): PATH unimplemented");
+            } break;
+            case SVG_Part_Kind_ELLIPSE: {
+                log_info("TODO(felix): ELLIPSE unimplemented");
+            } break;
+            case SVG_Part_Kind_RECT: {
+                assert(i <= 0xffff);
+                u16 shape_id = (u16)i;
+
+                SWF_Rect shape_bounds = swf_rect((i32)part->rect.x, (i32)(part->rect.x + part->rect.size.x), (i32)part->rect.y, (i32)(part->rect.y + part->rect.size.y));
+
+                SWF_Shape_With_Style shapes = {0}; // TODO(felix)
+
+                swf_push_defineshape3(&swf, shape_id, shape_bounds, shapes);
+            } break;
+            default: unreachable;
+        }
+    }
 
     // // NOTE(felix): this is a known valid SWF file given in the spec Appendix A
     // swf = string(
@@ -273,6 +366,8 @@ static void program(void) {
     //     "\xB4\x00\x00\x86\x06\x06\x01\x00"
     //     "\x01\x00\x00\x40\x00\x00\x00"
     // );
+
+    for (u64 i = 0; i < 4; i += 1) swf_length_in_header[i] = (u8)(swf.count >> (8 * i));
 
     bool ok = os_write_entire_file(cstring_from_string(&arena, swf_path), swf.string);
     if (!ok) os_exit(1);
