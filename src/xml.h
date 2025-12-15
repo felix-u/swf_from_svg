@@ -1,4 +1,4 @@
-// https://github.com/felix-u 2025-12-14
+// https://github.com/felix-u 2025-12-15
 // Public domain. NO WARRANTY - use at your own risk.
 
 #if !defined(XML_H)

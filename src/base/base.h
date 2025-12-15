@@ -164,8 +164,6 @@ typedef Array(String) Array_String;
 #define array_count(arr) (sizeof(arr) / sizeof(*(arr)))
 #define array_size(arr) ((arr).capacity * sizeof(*((arr).data)))
 
-#define discard (void)
-
 typedef Slice(u64) Slice_u64;
 #define MapU64(type) struct { \
     using(Array_##type, values); \
@@ -335,8 +333,8 @@ static void    scratch_end(Scratch scratch);
     #define asan_unpoison_memory_region(address, byte_count) __asan_unpoison_memory_region(address, byte_count)
     #include <sanitizer/asan_interface.h>
 #else
-    #define asan_poison_memory_region(address, byte_count)   statement_macro( discard(address); discard(byte_count); )
-    #define asan_unpoison_memory_region(address, byte_count) statement_macro( discard(address); discard(byte_count); )
+    #define asan_poison_memory_region(address, byte_count)   statement_macro( (void)(address); (void)(byte_count); )
+    #define asan_unpoison_memory_region(address, byte_count) statement_macro( (void)(address); (void)(byte_count); )
 #endif // BUILD_ASAN
 
 structdef(Map_Result) { u64 index; void *pointer; bool is_new; };
@@ -676,9 +674,9 @@ structdef(Platform_Common) {
 #if PLATFORM_NONE
     typedef Platform_Common Platform;
     static V2 platform_measure_text(Platform_Common *platform, String text, f32 font_size) {
-        discard platform;
-        discard text;
-        discard font_size;
+        (void)platform;
+        (void)text;
+        (void)font_size;
         panic("PLATFORM=NONE");
         return (V2){0};
     }
@@ -1928,8 +1926,8 @@ static Os_File_Info os_file_info(const char *relative_path) {
         }
     }
     #else
-        discard arena;
-        discard relative_path;
+        (void)arena;
+        (void)relative_path;
         panic("unimplemented");
     #endif
 
@@ -1941,7 +1939,7 @@ static bool os_make_directory(const char *relative_path, u32 mode) {
 
     #if BASE_OS == BASE_OS_WINDOWS
     {
-        discard mode;
+        (void)mode;
         BOOL win32_ok = CreateDirectoryA(relative_path, 0);
         ok = !!win32_ok;
 
@@ -1958,8 +1956,8 @@ static bool os_make_directory(const char *relative_path, u32 mode) {
     }
     #else
     {
-        discard mode;
-        discard path_as_cstring;
+        (void)mode;
+        (void)path_as_cstring;
         panic("unimplemented");
     }
     #endif
@@ -2077,7 +2075,7 @@ static void os_remove_file(const char *relative_path) {
         }
     }
     #else
-        discard path_as_cstring;
+        (void)path_as_cstring;
         panic("unimplemented");
     #endif
 }
@@ -2143,7 +2141,7 @@ static void log_internal_with_location(const char *file, u64 line, const char *f
     #if BUILD_DEBUG
         print("%s:%llu:%s(): logged here\n", file, line, func);
     #else
-        discard(file); discard(line); discard(func);
+        (void)(file); (void)(line); (void)(func);
     #endif
 }
 
@@ -2255,7 +2253,7 @@ static void os_write(String string) {
     // NOTE(felix): can't use assert in this function because panic() will call os_write, so we'll end up with a recursively failing assert and stack overflow. Instead, use `if (!condition) { breakpoint; abort(); }`
     #if BASE_OS == BASE_OS_WINDOWS
         #if WINDOWS_SUBSYSTEM_WINDOWS
-            discard(string);
+            (void)(string);
         #else
             if (string.count > UINT32_MAX) { breakpoint; os_abort(); }
 
@@ -2271,7 +2269,7 @@ static void os_write(String string) {
     #elif BASE_OS & BASE_OS_ANY_POSIX
         int stdout_handle = 1;
         i64 bytes_written = write(stdout_handle, string.data, string.count);
-        discard(bytes_written);
+        (void)(bytes_written);
 
     #else
         #error "unimplemented"
