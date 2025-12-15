@@ -519,6 +519,7 @@ static const u8 decimal_from_hex_digit_table[256] = {
     _for_valid_hex_digit(_make_hex_digit_value_table)
 };
 
+static f64 f64_from_string(String s);
 static u64 int_from_string_base(String s, u64 base);
 
 static char *cstring_from_string(Arena *arena, String string);
@@ -1558,6 +1559,37 @@ static force_inline M4 m4_transpose(M4 m) {
     for (int i = 0; i < 4; i += 1) for (int j = 0; j < 4; j += 1) {
         result.c[i][j] = m.c[j][i];
     }
+    return result;
+}
+
+static f64 f64_from_string(String s) {
+    f64 result = 0;
+    if (s.count == 0) return result;
+
+    bool is_negative = s.data[0] == '-';
+    s.data += is_negative;
+    s.count -= is_negative;
+
+    u64 decimal_index = 0;
+    while (decimal_index < s.count && s.data[decimal_index] != '.') decimal_index += 1;
+    String int_string = slice_range(s, 0, decimal_index);
+    f64 int_part = (f64)int_from_string_base(int_string, 10);
+
+    f64 decimal_part = 0;
+    if (decimal_index != s.count) {
+        String decimal_string = slice_range(s, decimal_index + 1, s.count);
+        u64 digit_count = decimal_string.count;
+        for (i64 i = (i64)decimal_string.count; i >= 0; i -= 1) {
+            bool trailing_zero = decimal_string.data[i] == 0;
+            digit_count -= trailing_zero;
+            if (!trailing_zero) break;
+        }
+        decimal_part = (f64)int_from_string_base(decimal_string, 10);
+        for (u64 i = 0; i < digit_count; i += 1) decimal_part *= 0.1;
+    }
+
+    result = int_part + decimal_part;
+    result *= (f64)is_negative * -2.0 + 1.0;
     return result;
 }
 

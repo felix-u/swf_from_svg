@@ -24,7 +24,6 @@ typedef enum xml_Type {
     xml_Type_TAG_CLOSE,
     xml_Type_TAG_OPEN,
     xml_Type_ATTRIBUTE,
-    xml_Type_STRING,
     xml_Type_ERROR,
     xml_Type_END,
 
@@ -37,7 +36,7 @@ typedef struct xml_Value {
 } xml_Value;
 
 _Bool xml_read(xml_Reader *r, xml_Value *key, xml_Value *value);
-xml_Reader xml_reader(const char *data, int length);
+xml_Reader xml_reader(const char *data, unsigned long long length);
 
 
 #endif // XML_H
@@ -98,7 +97,7 @@ _Bool xml_read(xml_Reader *r, xml_Value *key, xml_Value *value) {
                 if (!xml__skip_whitespace(r)) break;
                 if (*r->c++ != '"') break;
 
-                value->type = xml_Type_STRING;
+                value->type = xml_Type_ATTRIBUTE;
                 value->start = r->c;
                 if (!xml__to_char(r, '"')) break;
                 value->end = r->c++;
@@ -164,6 +163,7 @@ _Bool xml_read(xml_Reader *r, xml_Value *key, xml_Value *value) {
             *value = (xml_Value){0};
             return 1;
         } break;
+        default: break;
     }
 
     *key = *value = (xml_Value){0};
@@ -172,7 +172,7 @@ _Bool xml_read(xml_Reader *r, xml_Value *key, xml_Value *value) {
     return 0;
 }
 
-xml_Reader xml_reader(const char *data, int length) {
+xml_Reader xml_reader(const char *data, unsigned long long length) {
     xml_Reader reader = {
         .data = data,
         .c = data,
