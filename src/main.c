@@ -9,6 +9,10 @@
 #define BASE_IMPLEMENTATION
 #include "base/base.h"
 
+static struct {
+    V2 min, size, scale;
+} g_viewbox;
+
 static String string_from_xml(xml_Value value) {
     String result = {
         .data = (u8 *)value.start,
@@ -28,6 +32,11 @@ static i32 twips_from_pixels(f32 pixels) {
     i32 result = (i32)(pixels * 20.f + 0.5f);
     return result;
 }
+
+static i32 twips_from_svg_x(f32 x) { return twips_from_pixels((x - g_viewbox.min.x) * g_viewbox.scale.x); }
+static i32 twips_from_svg_y(f32 y) { return twips_from_pixels((y - g_viewbox.min.y) * g_viewbox.scale.y); }
+static i32 twips_from_svg_dx(f32 dx) { return twips_from_pixels(dx * g_viewbox.scale.x); }
+static i32 twips_from_svg_dy(f32 dy) { return twips_from_pixels(dy * g_viewbox.scale.y); }
 
 structdef(SWF_Rect) { u8 bytes[9]; };
 static SWF_Rect swf_rect(i16 x_min, i16 x_max, i16 y_min, i16 y_max) {
@@ -305,8 +314,8 @@ static void swf_push_shapewithstyle(String_Builder *swf, SWF_Shape_With_Style sh
                 have_point = true;
 
                 {
-                    i32 x_tw = twips_from_pixels(cur_x);
-                    i32 y_tw = twips_from_pixels(cur_y);
+                    i32 x_tw = twips_from_svg_x(cur_x);
+                    i32 y_tw = twips_from_svg_y(cur_y);
 
                     /* StyleChangeRecord: MoveTo + FillStyle0=1 + LineStyle=1 */
                     swf_bw_push_bit(&bw, 0);
@@ -350,8 +359,8 @@ static void swf_push_shapewithstyle(String_Builder *swf, SWF_Shape_With_Style sh
                     }
 
                     {
-                        i32 nx_tw = twips_from_pixels(lx);
-                        i32 ny_tw = twips_from_pixels(ly);
+                        i32 nx_tw = twips_from_svg_x(lx);
+                        i32 ny_tw = twips_from_svg_y(ly);
 
                         i32 dx = nx_tw - last_x_tw;
                         i32 dy = ny_tw - last_y_tw;
@@ -395,8 +404,8 @@ static void swf_push_shapewithstyle(String_Builder *swf, SWF_Shape_With_Style sh
                     }
 
                     {
-                        i32 nx_tw = twips_from_pixels(x);
-                        i32 ny_tw = twips_from_pixels(y);
+                        i32 nx_tw = twips_from_svg_x(x);
+                        i32 ny_tw = twips_from_svg_y(y);
 
                         i32 dx = nx_tw - last_x_tw;
                         i32 dy = ny_tw - last_y_tw;
@@ -465,8 +474,8 @@ static void swf_push_shapewithstyle(String_Builder *swf, SWF_Shape_With_Style sh
                             3.0f*it*t*t*y2 +
                             t*t*t*y3;
 
-                        i32 nx_tw = twips_from_pixels(bx);
-                        i32 ny_tw = twips_from_pixels(by);
+                        i32 nx_tw = twips_from_svg_x(bx);
+                        i32 ny_tw = twips_from_svg_y(by);
 
                         i32 dx = nx_tw - last_x_tw;
                         i32 dy = ny_tw - last_y_tw;
@@ -498,8 +507,8 @@ static void swf_push_shapewithstyle(String_Builder *swf, SWF_Shape_With_Style sh
                 assert(have_point);
 
                 {
-                    i32 sx_tw = twips_from_pixels(sub_x);
-                    i32 sy_tw = twips_from_pixels(sub_y);
+                    i32 sx_tw = twips_from_svg_x(sub_x);
+                    i32 sy_tw = twips_from_svg_y(sub_y);
 
                     if (sx_tw != last_x_tw || sy_tw != last_y_tw) {
                         i32 dx = sx_tw - last_x_tw;
@@ -533,10 +542,10 @@ static void swf_push_shapewithstyle(String_Builder *swf, SWF_Shape_With_Style sh
             }
         }
     } else if (part.kind == SVG_Part_Kind_RECT) {
-        i32 x0 = twips_from_pixels(part.rect.position.x);
-        i32 y0 = twips_from_pixels(part.rect.position.y);
-        i32 w  = twips_from_pixels(part.rect.size.x);
-        i32 h  = twips_from_pixels(part.rect.size.y);
+        i32 x0 = twips_from_svg_x(part.rect.position.x);
+        i32 y0 = twips_from_svg_y(part.rect.position.y);
+        i32 w  = twips_from_svg_dx(part.rect.size.x);
+        i32 h  = twips_from_svg_dy(part.rect.size.y);
 
         /* StyleChangeRecord: MoveTo + FillStyle0=1 + LineStyle=1 */
         swf_bw_push_bit(&bw, 0); /* TypeFlag: non-edge */
@@ -594,10 +603,10 @@ static void swf_push_shapewithstyle(String_Builder *swf, SWF_Shape_With_Style sh
     } else {
         assert(part.kind == SVG_Part_Kind_ELLIPSE);
 
-        i32 cx = twips_from_pixels(part.ellipse.centre.x);
-        i32 cy = twips_from_pixels(part.ellipse.centre.y);
-        i32 rx = twips_from_pixels(part.ellipse.radius.x);
-        i32 ry = twips_from_pixels(part.ellipse.radius.y);
+        i32 cx = twips_from_svg_x(part.ellipse.centre.x);
+        i32 cy = twips_from_svg_y(part.ellipse.centre.y);
+        i32 rx = twips_from_svg_dx(part.ellipse.radius.x);
+        i32 ry = twips_from_svg_dy(part.ellipse.radius.y);
 
         assert(rx >= 0 && ry >= 0);
 
@@ -730,7 +739,40 @@ static void program(void) {
                     else if (string_equals(key_string, string("height"))) parse_f32 = &svg_height;
                     if (parse_f32 != 0) *parse_f32 = (f32)f64_from_string(value_string);
 
-                    bool done_here = svg_width != 0 && svg_height != 0;
+                    if (string_equals(key_string, string("viewBox"))) {
+                        String v = value_string;
+
+                        u64 min_x_start = 0;
+                        u64 min_x_end = min_x_start;
+                        while (min_x_end < v.count && v.data[min_x_end] != ' ') min_x_end += 1;
+                        String min_x_string = string_range(v, min_x_start, min_x_end);
+                        g_viewbox.min.x = (f32)f64_from_string(min_x_string);
+
+                        u64 min_y_start = min_x_end + 1;
+                        u64 min_y_end = min_y_start;
+                        while (min_y_end < v.count && v.data[min_y_end] != ' ') min_y_end += 1;
+                        String min_y_string = string_range(v, min_y_start, min_y_end);
+                        g_viewbox.min.y = (f32)f64_from_string(min_y_string);
+
+                        u64 width_start = min_y_end + 1;
+                        u64 width_end = width_start;
+                        while (width_end < v.count && v.data[width_end] != ' ') width_end += 1;
+                        String width_string = string_range(v, width_start, width_end);
+                        g_viewbox.size.x = (f32)f64_from_string(width_string);
+
+                        u64 height_start = width_end + 1;
+                        u64 height_end = height_start;
+                        while (height_end < v.count && v.data[height_end] != ' ') height_end += 1;
+                        String height_string = string_range(v, height_start, height_end);
+                        g_viewbox.size.y = (f32)f64_from_string(height_string);
+
+                        assert(g_viewbox.size.x > 0);
+                        assert(g_viewbox.size.y > 0);
+                        g_viewbox.scale.x = svg_width / g_viewbox.size.x;
+                        g_viewbox.scale.y = svg_width / g_viewbox.size.y;
+                    }
+
+                    bool done_here = svg_width != 0 && svg_height != 0 && g_viewbox.scale.x != 0;
                     if (done_here) break;
                 }
             }
@@ -1013,7 +1055,7 @@ static void program(void) {
                 shapes.fill_style.color = part->fill_rgba;
 
                 {
-                    i32 stroke_twips = twips_from_pixels(part->stroke_width);
+                    i32 stroke_twips = twips_from_svg_dx(part->stroke_width);
                     if (stroke_twips < 0) stroke_twips = 0;
                     assert(stroke_twips <= 0xffff);
                     shapes.line_style.width_twips = (u16)stroke_twips;
