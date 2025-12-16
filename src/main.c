@@ -17,6 +17,13 @@ static String string_from_xml(xml_Value value) {
     return result;
 }
 
+static bool xml_read_with_strings(xml_Reader *r, xml_Value *key, xml_Value *value, String *key_string, String *value_string) {
+    bool result = xml_read(r, key, value);
+    *key_string = string_from_xml(*key);
+    *value_string = string_from_xml(*value);
+    return result;
+}
+
 static i32 twips_from_pixels(f32 pixels) {
     i32 result = (i32)(pixels * 20.f + 0.5f);
     return result;
@@ -27,7 +34,8 @@ static SWF_Rect swf_rect(i32 x_min, i32 x_max, i32 y_min, i32 y_max) {
     SWF_Rect rect = {0};
     u8 *r = rect.bytes;
 
-    u8 bits_per_field = 32;
+    u8 bits_per_field = 31;
+    assert(bits_per_field <= 31);
     r[0] |= bits_per_field << 3;
 
     i32 values[4] = { x_min, x_max, y_min, y_max };
@@ -35,7 +43,7 @@ static SWF_Rect swf_rect(i32 x_min, i32 x_max, i32 y_min, i32 y_max) {
     u64 r_bit = 5;
     for (u64 value_index = 0; value_index < 4; value_index += 1) {
         u32 unsigned_value = bit_cast(u32) values[value_index];
-        for (i32 bit = 31; bit >= 0; bit -= 1, r_bit += 1) {
+        for (i32 bit = bits_per_field - 1; bit >= 0; bit -= 1, r_bit += 1) {
             u64 r_byte = r_bit >> 3;
             u64 r_bit_in_byte = 7 - (r_bit & 7);
             u8 b = (u8)((unsigned_value >> bit) & 1);
@@ -72,14 +80,10 @@ structdef(SVG_Part) {
     };
 };
 
-static bool xml_read_with_strings(xml_Reader *r, xml_Value *key, xml_Value *value, String *key_string, String *value_string) {
-    bool result = xml_read(r, key, value);
-    *key_string = string_from_xml(*key);
-    *value_string = string_from_xml(*value);
-    return result;
-}
-
 typedef enum SWF_Tag_Type {
+    SWF_Tag_Type_END          =  0,
+    SWF_Tag_Type_SHOWFRAME    =  1,
+    SWF_Tag_Type_PLACEOBJECT2 = 26,
     SWF_Tag_Type_DEFINESHAPE3 = 32,
 } SWF_Tag_Type;
 
@@ -133,6 +137,13 @@ static void swf_write_u16(String_Builder *swf, u16 value) {
     push(swf, (u8)(value >> 8));
 }
 
+static void swf_write_u32(String_Builder *swf, u32 value) {
+    push(swf, (u8)value);
+    push(swf, (u8)(value >> 8));
+    push(swf, (u8)(value >> 16));
+    push(swf, (u8)(value >> 24));
+}
+
 structdef(SWF_Fill_Style) {
     u8 type;
     u32 color;
@@ -148,6 +159,52 @@ structdef(SWF_Shape_With_Style) {
     SWF_Line_Style line_style;
 };
 
+static u32 swf_sbits_width(i32 v) {
+    for (u32 n = 1; n <= 32; n += 1) {
+        i64 minv = -((i64)1 << (n - 1));
+        i64 maxv =  ((i64)1 << (n - 1)) - 1;
+        if ((i64)v >= minv && (i64)v <= maxv) return n;
+    }
+    return 32;
+}
+
+typedef struct SWF_Bit_Writer {
+    String_Builder *swf;
+    u8 byte;
+    u32 bit_count; /* 0..7 bits currently in 'byte' (from MSB downward) */
+} SWF_Bit_Writer;
+
+static void swf_bw_push_bit(SWF_Bit_Writer *w, u32 bit) {
+    u32 shift = 7 - (w->bit_count & 7);
+    w->byte |= (u8)((bit & 1) << shift);
+    w->bit_count += 1;
+    if ((w->bit_count & 7) == 0) {
+        push(w->swf, w->byte);
+        w->byte = 0;
+    }
+}
+
+static void swf_bw_push_ubits(SWF_Bit_Writer *w, u32 v, u32 nbits) {
+    for (i32 bit = (i32)nbits - 1; bit >= 0; bit -= 1) {
+        swf_bw_push_bit(w, (v >> bit) & 1u);
+    }
+}
+
+static void swf_bw_push_sbits(SWF_Bit_Writer *w, i32 v, u32 nbits) {
+    u32 uv = (u32)v;
+    for (i32 bit = (i32)nbits - 1; bit >= 0; bit -= 1) {
+        swf_bw_push_bit(w, (uv >> bit) & 1u);
+    }
+}
+
+static void swf_bw_byte_align(SWF_Bit_Writer *w) {
+    if ((w->bit_count & 7) != 0) {
+        push(w->swf, w->byte);
+        w->byte = 0;
+        w->bit_count = (w->bit_count + 7) & ~7u;
+    }
+}
+
 static void swf_push_shapewithstyle(String_Builder *swf, SWF_Shape_With_Style shapes, SVG_Part part) {
     // FILLSTYLEARRAY
     push(swf, 1); // count
@@ -155,7 +212,7 @@ static void swf_push_shapewithstyle(String_Builder *swf, SWF_Shape_With_Style sh
         assert(shapes.fill_style.type == 0); // solid
         push(swf, shapes.fill_style.type);
 
-        u32 rbga = shapes.fill_style.color;
+        u32 rgba = shapes.fill_style.color;
         push(swf, (u8)(rgba >> 24));
         push(swf, (u8)(rgba >> 16));
         push(swf, (u8)(rgba >> 8));
@@ -166,16 +223,86 @@ static void swf_push_shapewithstyle(String_Builder *swf, SWF_Shape_With_Style sh
     push(swf, 1); // count
     {
         swf_write_u16(swf, shapes.line_style.width_twips);
-        u32 rbga = shapes.line_style.color;
+
+        u32 rgba = shapes.line_style.color;
         push(swf, (u8)(rgba >> 24));
         push(swf, (u8)(rgba >> 16));
         push(swf, (u8)(rgba >> 8));
         push(swf, (u8)(rgba >> 0));
     }
 
-    push(swf, 0x11); // NumFillBits = 1, NumLineBits = 1
+    push(swf, 0x11); // NumFillBits=1 (high nibble), NumLineBits=1 (low nibble)
 
-    assert(part.type == SVG_Part_Type_RECT);
+    assert(part.kind == SVG_Part_Kind_RECT);
+
+    {
+        i32 x0 = twips_from_pixels(part.rect.position.x);
+        i32 y0 = twips_from_pixels(part.rect.position.y);
+        i32 w  = twips_from_pixels(part.rect.size.x);
+        i32 h  = twips_from_pixels(part.rect.size.y);
+
+        SWF_Bit_Writer bw = { .swf = swf, .byte = 0, .bit_count = 0 };
+
+        /* StyleChangeRecord: MoveTo + FillStyle0=1 + LineStyle=1 */
+        swf_bw_push_bit(&bw, 0); /* TypeFlag: non-edge */
+
+        swf_bw_push_bit(&bw, 0); /* StateNewStyles */
+        swf_bw_push_bit(&bw, 1); /* StateLineStyle */
+        swf_bw_push_bit(&bw, 0); /* StateFillStyle1 */
+        swf_bw_push_bit(&bw, 1); /* StateFillStyle0 */
+        swf_bw_push_bit(&bw, 1); /* StateMoveTo */
+
+        {
+            u32 mx = swf_sbits_width(x0);
+            u32 my = swf_sbits_width(y0);
+            u32 move_bits = (mx > my) ? mx : my;
+            if (move_bits < 1) move_bits = 1;
+            if (move_bits > 31) move_bits = 31;
+
+            swf_bw_push_ubits(&bw, move_bits, 5);
+            swf_bw_push_sbits(&bw, x0, move_bits);
+            swf_bw_push_sbits(&bw, y0, move_bits);
+        }
+
+        swf_bw_push_ubits(&bw, 1, 1); /* FillStyle0 index (NumFillBits=1) */
+        swf_bw_push_ubits(&bw, 1, 1); /* LineStyle index (NumLineBits=1) */
+
+        /* 4 StraightEdgeRecords (axis-aligned) */
+        {
+            i32 dx[4] = { +w,  0, -w,  0 };
+            i32 dy[4] = {  0, +h,  0, -h };
+
+            for (u32 e = 0; e < 4; e += 1) {
+                i32 edx = dx[e];
+                i32 edy = dy[e];
+
+                swf_bw_push_bit(&bw, 1); /* TypeFlag: edge */
+                swf_bw_push_bit(&bw, 1); /* StraightFlag: straight */
+
+                if (edy == 0) {
+                    u32 n = swf_sbits_width(edx);
+                    if (n < 2) n = 2;
+                    swf_bw_push_ubits(&bw, n - 2, 4); /* NumBits */
+                    swf_bw_push_bit(&bw, 0);          /* GeneralLineFlag */
+                    swf_bw_push_bit(&bw, 0);          /* VertLineFlag=0 => horizontal */
+                    swf_bw_push_sbits(&bw, edx, n);   /* DeltaX */
+                } else {
+                    u32 n = swf_sbits_width(edy);
+                    if (n < 2) n = 2;
+                    swf_bw_push_ubits(&bw, n - 2, 4); /* NumBits */
+                    swf_bw_push_bit(&bw, 0);          /* GeneralLineFlag */
+                    swf_bw_push_bit(&bw, 1);          /* VertLineFlag=1 => vertical */
+                    swf_bw_push_sbits(&bw, edy, n);   /* DeltaY */
+                }
+            }
+        }
+
+        /* EndShapeRecord: 0 + five 0 flags */
+        swf_bw_push_bit(&bw, 0);
+        swf_bw_push_ubits(&bw, 0, 5);
+
+        swf_bw_byte_align(&bw);
+    }
 
     // TODO(felix): StyleChangeRecord: select fill & line styles, move to x0,y0
 
@@ -184,19 +311,27 @@ static void swf_push_shapewithstyle(String_Builder *swf, SWF_Shape_With_Style sh
     // TODO(felix): EndShapeRecord
 }
 
-static void swf_push_defineshape3(String_Builder *swf, u16 shape_id, SWF_Rect shape_bounds, SWF_Shape_With_Style shapes) {
-    u16 length = sizeof shape_id + sizeof shape_bounds.bytes + sizeof shapes;
-    assert(length < 0x3f);
-    u16 tag_code_and_length = (SWF_Tag_Type_DEFINESHAPE3 << 6) | length;
-    swf_write_u16(swf, tag_code_and_length);
+static void swf_push_defineshape3(String_Builder *swf, u16 shape_id, SWF_Rect shape_bounds, SWF_Shape_With_Style shapes, SVG_Part part) {
+    assert(shape_id != 0);
+
+    u64 tag_start = swf->count;
+    swf_write_u16(swf, (u16)((SWF_Tag_Type_DEFINESHAPE3 << 6) | 0x3f));
+    u64 length_patch_at = swf->count;
+    swf_write_u32(swf, 0);
 
     swf_write_u16(swf, shape_id);
+    for (u64 i = 0; i < sizeof shape_bounds.bytes; i += 1) push(swf, shape_bounds.bytes[i]);
+    swf_push_shapewithstyle(swf, shapes, part);
 
-    for (u64 i = 0; i < sizeof shape_bounds.bytes; i += 1) {
-        push(swf, shape_bounds.bytes[i]);
-    }
+    u64 body_length = swf->count - (length_patch_at + 4);
+    assert(body_length <= 0xffffffffu);
+    u32 body_length_u32 = (u32)body_length;
+    swf->data[length_patch_at + 0] = (u8)(body_length_u32 >> 0);
+    swf->data[length_patch_at + 1] = (u8)(body_length_u32 >> 8);
+    swf->data[length_patch_at + 2] = (u8)(body_length_u32 >> 16);
+    swf->data[length_patch_at + 3] = (u8)(body_length_u32 >> 24);
 
-    swf_push_shapewithstyle(swf, shapes);
+    assert((swf->count - tag_start) == (2 + 4 + body_length));
 }
 
 static void program(void) {
@@ -323,12 +458,14 @@ static void program(void) {
         "\x01\0" // [u16] framerate (1)
         "\x01\0" // [u16] frame count (1)
     );
-    u8 *swf_length_in_header = &swf.data[4];
-    u8 *frame_size_rect_in_header = &swf.data[8];
 
+    u8 *frame_size_rect_in_header = &swf.data[8];
     SWF_Rect frame_size = swf_rect(0, twips_from_pixels(svg_width), 0, twips_from_pixels(svg_height));
+    assert((frame_size.bytes[0] >> 3) != 0);
     memcpy(frame_size_rect_in_header, frame_size.bytes, sizeof frame_size.bytes);
 
+    u16 next_shape_id = 1;
+    u16 next_depth = 1;
     for (u64 i = 0; i < svg_parts.count; i += 1) {
         SVG_Part *part = &svg_parts.data[i];
 
@@ -340,33 +477,76 @@ static void program(void) {
                 log_info("TODO(felix): ELLIPSE unimplemented");
             } break;
             case SVG_Part_Kind_RECT: {
-                assert(i <= 0xffff);
-                u16 shape_id = (u16)i;
+                assert(next_shape_id != 0);
+                assert(next_depth != 0);
 
-                SWF_Rect shape_bounds = swf_rect((i32)part->rect.x, (i32)(part->rect.x + part->rect.size.x), (i32)part->rect.y, (i32)(part->rect.y + part->rect.size.y));
+                u16 shape_id = next_shape_id++;
+                u16 depth = next_depth++;
 
-                SWF_Shape_With_Style shapes = {0}; // TODO(felix)
+                i32 x0 = twips_from_pixels(part->rect.position.x);
+                i32 y0 = twips_from_pixels(part->rect.position.y);
+                i32 x1 = x0 + twips_from_pixels(part->rect.size.x);
+                i32 y1 = y0 + twips_from_pixels(part->rect.size.y);
 
-                swf_push_defineshape3(&swf, shape_id, shape_bounds, shapes);
+                SWF_Rect shape_bounds = swf_rect(x0, x1, y0, y1);
+
+                SWF_Shape_With_Style shapes = {0};
+                shapes.fill_style.type = 0;
+                shapes.fill_style.color = part->fill_rgba;
+
+                {
+                    i32 stroke_twips = twips_from_pixels(part->stroke_width);
+                    if (stroke_twips < 0) stroke_twips = 0;
+                    assert(stroke_twips <= 0xffff);
+                    shapes.line_style.width_twips = (u16)stroke_twips;
+                }
+                shapes.line_style.color = (part->fill_rgba != 0) ? part->fill_rgba : 0x000000ff;
+
+                swf_push_defineshape3(&swf, shape_id, shape_bounds, shapes, *part);
+
+                {
+                    u16 body_length = 1 + 2 + 2 + 1;
+                    u16 tag_code_and_length = (u16)((SWF_Tag_Type_PLACEOBJECT2 << 6) | body_length);
+                    swf_write_u16(&swf, tag_code_and_length);
+
+                    u8 flags = 0;
+                    flags |= (1u << 2); /* HasMatrix */
+                    flags |= (1u << 1); /* HasCharacter */
+                    push(&swf, flags);
+
+                    swf_write_u16(&swf, depth);
+                    swf_write_u16(&swf, shape_id);
+                    push(&swf, 0); /* empty MATRIX */
+                }
             } break;
             default: unreachable;
         }
     }
 
-    // // NOTE(felix): this is a known valid SWF file given in the spec Appendix A
-    // swf = string(
-    //     "\x46\x57\x53\x03\x4F\x00\x00\x00"
-    //     "\x78\x00\x05\x5F\x00\x00\x0F\xA0"
-    //     "\x00\x00\x0C\x01\x00\x43\x02\xFF"
-    //     "\xFF\xFF\xBF\x00\x23\x00\x00\x00"
-    //     "\x01\x00\x70\xFB\x49\x97\x0D\x0C"
-    //     "\x7D\x50\x00\x01\x14\x00\x00\x00"
-    //     "\x00\x01\x25\xC9\x92\x0D\x21\xED"
-    //     "\x48\x87\x65\x30\x3B\x6D\xE1\xD8"
-    //     "\xB4\x00\x00\x86\x06\x06\x01\x00"
-    //     "\x01\x00\x00\x40\x00\x00\x00"
-    // );
+    swf_write_u16(&swf, (u16)((SWF_Tag_Type_SHOWFRAME << 6) | 0));
+    swf_write_u16(&swf, (u16)((SWF_Tag_Type_END << 6) | 0));
 
+    if (BUILD_DEBUG) {
+        // NOTE(felix): this is a known valid SWF file given in the spec Appendix A
+        const char *path = "official_example.swf";
+        if (!os_file_info(path).exists) {
+            String official_example = string(
+                "\x46\x57\x53\x03\x4F\x00\x00\x00"
+                "\x78\x00\x05\x5F\x00\x00\x0F\xA0"
+                "\x00\x00\x0C\x01\x00\x43\x02\xFF"
+                "\xFF\xFF\xBF\x00\x23\x00\x00\x00"
+                "\x01\x00\x70\xFB\x49\x97\x0D\x0C"
+                "\x7D\x50\x00\x01\x14\x00\x00\x00"
+                "\x00\x01\x25\xC9\x92\x0D\x21\xED"
+                "\x48\x87\x65\x30\x3B\x6D\xE1\xD8"
+                "\xB4\x00\x00\x86\x06\x06\x01\x00"
+                "\x01\x00\x00\x40\x00\x00\x00"
+            );
+            os_write_entire_file(path, official_example);
+        }
+    }
+
+    u8 *swf_length_in_header = &swf.data[4];
     for (u64 i = 0; i < 4; i += 1) swf_length_in_header[i] = (u8)(swf.count >> (8 * i));
 
     bool ok = os_write_entire_file(cstring_from_string(&arena, swf_path), swf.string);
