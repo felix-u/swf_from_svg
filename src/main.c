@@ -68,7 +68,7 @@ structdef(SVG_Part) {
     f32 stroke_width;
     union {
         struct {
-            int TODO;
+            String d;
         } path;
         struct {
             V2 centre, radius;
@@ -203,6 +203,37 @@ static void swf_bw_byte_align(SWF_Bit_Writer *w) {
     }
 }
 
+static bool svg_path_is_cmd(u8 c) {
+    return ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z'));
+}
+
+static void svg_path_skip(String d, u64 *i) {
+    while (*i < d.count) {
+        u8 c = d.data[*i];
+        if (c == ' ' || c == '\n' || c == '\t' || c == '\r' || c == ',') (*i) += 1;
+        else break;
+    }
+}
+
+static f32 svg_path_read_f32(String d, u64 *i) {
+    svg_path_skip(d, i);
+    assert(*i < d.count);
+
+    u64 start = *i;
+    while (*i < d.count) {
+        u8 c = d.data[*i];
+        bool ok =
+            (c >= '0' && c <= '9') ||
+            c == '+' || c == '-' ||
+            c == '.' || c == 'e' || c == 'E';
+        if (!ok) break;
+        (*i) += 1;
+    }
+    assert(*i > start);
+
+    return (f32)f64_from_string(string_range(d, start, *i));
+}
+
 static void swf_push_shapewithstyle(String_Builder *swf, SWF_Shape_With_Style shapes, SVG_Part part) {
     // FILLSTYLEARRAY
     push(swf, 1); // count
@@ -233,7 +264,275 @@ static void swf_push_shapewithstyle(String_Builder *swf, SWF_Shape_With_Style sh
 
     SWF_Bit_Writer bw = { .swf = swf };
 
-    if (part.kind == SVG_Part_Kind_RECT) {
+    if (part.kind == SVG_Part_Kind_PATH) {
+        String d = part.path.d;
+        assert(d.count != 0);
+
+        u64 i = 0;
+        u8 cmd = 0;
+
+        f32 cur_x = 0, cur_y = 0;
+        f32 sub_x = 0, sub_y = 0;
+        bool have_point = false;
+
+        i32 last_x_tw = 0;
+        i32 last_y_tw = 0;
+
+        while (i < d.count) {
+            svg_path_skip(d, &i);
+            if (i >= d.count) break;
+
+            if (svg_path_is_cmd(d.data[i])) {
+                cmd = d.data[i];
+                i += 1;
+            } else {
+                assert(cmd != 0);
+            }
+
+            if (cmd == 'M' || cmd == 'm') {
+                f32 x = svg_path_read_f32(d, &i);
+                f32 y = svg_path_read_f32(d, &i);
+
+                if (cmd == 'm' && have_point) {
+                    x += cur_x;
+                    y += cur_y;
+                }
+
+                cur_x = x;
+                cur_y = y;
+                sub_x = x;
+                sub_y = y;
+                have_point = true;
+
+                {
+                    i32 x_tw = twips_from_pixels(cur_x);
+                    i32 y_tw = twips_from_pixels(cur_y);
+
+                    /* StyleChangeRecord: MoveTo + FillStyle0=1 + LineStyle=1 */
+                    swf_bw_push_bit(&bw, 0);
+
+                    swf_bw_push_bit(&bw, 0);
+                    swf_bw_push_bit(&bw, 1);
+                    swf_bw_push_bit(&bw, 0);
+                    swf_bw_push_bit(&bw, 1);
+                    swf_bw_push_bit(&bw, 1);
+
+                    {
+                        u32 mx = swf_sbits_width(x_tw);
+                        u32 my = swf_sbits_width(y_tw);
+                        u32 move_bits = (mx > my) ? mx : my;
+                        if (move_bits < 1) move_bits = 1;
+                        if (move_bits > 31) move_bits = 31;
+
+                        swf_bw_push_ubits(&bw, move_bits, 5);
+                        swf_bw_push_sbits(&bw, x_tw, move_bits);
+                        swf_bw_push_sbits(&bw, y_tw, move_bits);
+                    }
+
+                    swf_bw_push_ubits(&bw, 1, 1);
+                    swf_bw_push_ubits(&bw, 1, 1);
+
+                    last_x_tw = x_tw;
+                    last_y_tw = y_tw;
+                }
+
+                /* implicit lineto for extra pairs */
+                while (1) {
+                    svg_path_skip(d, &i);
+                    if (i >= d.count) break;
+                    if (svg_path_is_cmd(d.data[i])) break;
+
+                    f32 lx = svg_path_read_f32(d, &i);
+                    f32 ly = svg_path_read_f32(d, &i);
+                    if (cmd == 'm') {
+                        lx += cur_x;
+                        ly += cur_y;
+                    }
+
+                    {
+                        i32 nx_tw = twips_from_pixels(lx);
+                        i32 ny_tw = twips_from_pixels(ly);
+
+                        i32 dx = nx_tw - last_x_tw;
+                        i32 dy = ny_tw - last_y_tw;
+
+                        swf_bw_push_bit(&bw, 1);
+                        swf_bw_push_bit(&bw, 1);
+
+                        {
+                            u32 nx = swf_sbits_width(dx);
+                            u32 ny = swf_sbits_width(dy);
+                            u32 n = (nx > ny) ? nx : ny;
+                            if (n < 2) n = 2;
+                            if (n > 31) n = 31;
+
+                            swf_bw_push_ubits(&bw, n - 2, 4);
+                            swf_bw_push_bit(&bw, 1);
+                            swf_bw_push_sbits(&bw, dx, n);
+                            swf_bw_push_sbits(&bw, dy, n);
+                        }
+
+                        last_x_tw = nx_tw;
+                        last_y_tw = ny_tw;
+                    }
+
+                    cur_x = lx;
+                    cur_y = ly;
+                }
+            } else if (cmd == 'L' || cmd == 'l') {
+                assert(have_point);
+
+                while (1) {
+                    svg_path_skip(d, &i);
+                    if (i >= d.count) break;
+                    if (svg_path_is_cmd(d.data[i])) break;
+
+                    f32 x = svg_path_read_f32(d, &i);
+                    f32 y = svg_path_read_f32(d, &i);
+                    if (cmd == 'l') {
+                        x += cur_x;
+                        y += cur_y;
+                    }
+
+                    {
+                        i32 nx_tw = twips_from_pixels(x);
+                        i32 ny_tw = twips_from_pixels(y);
+
+                        i32 dx = nx_tw - last_x_tw;
+                        i32 dy = ny_tw - last_y_tw;
+
+                        swf_bw_push_bit(&bw, 1);
+                        swf_bw_push_bit(&bw, 1);
+
+                        {
+                            u32 nx = swf_sbits_width(dx);
+                            u32 ny = swf_sbits_width(dy);
+                            u32 n = (nx > ny) ? nx : ny;
+                            if (n < 2) n = 2;
+                            if (n > 31) n = 31;
+
+                            swf_bw_push_ubits(&bw, n - 2, 4);
+                            swf_bw_push_bit(&bw, 1);
+                            swf_bw_push_sbits(&bw, dx, n);
+                            swf_bw_push_sbits(&bw, dy, n);
+                        }
+
+                        last_x_tw = nx_tw;
+                        last_y_tw = ny_tw;
+                    }
+
+                    cur_x = x;
+                    cur_y = y;
+                }
+            } else if (cmd == 'C' || cmd == 'c') {
+                assert(have_point);
+
+                while (1) {
+                    svg_path_skip(d, &i);
+                    if (i >= d.count) break;
+                    if (svg_path_is_cmd(d.data[i])) break;
+
+                    f32 x1 = svg_path_read_f32(d, &i);
+                    f32 y1 = svg_path_read_f32(d, &i);
+                    f32 x2 = svg_path_read_f32(d, &i);
+                    f32 y2 = svg_path_read_f32(d, &i);
+                    f32 x3 = svg_path_read_f32(d, &i);
+                    f32 y3 = svg_path_read_f32(d, &i);
+
+                    if (cmd == 'c') {
+                        x1 += cur_x; y1 += cur_y;
+                        x2 += cur_x; y2 += cur_y;
+                        x3 += cur_x; y3 += cur_y;
+                    }
+
+                    f32 x0 = cur_x;
+                    f32 y0 = cur_y;
+
+                    u32 segments = 16;
+                    for (u32 s = 1; s <= segments; s += 1) {
+                        f32 t = (f32)s / (f32)segments;
+                        f32 it = 1.0f - t;
+
+                        f32 bx =
+                            it*it*it*x0 +
+                            3.0f*it*it*t*x1 +
+                            3.0f*it*t*t*x2 +
+                            t*t*t*x3;
+
+                        f32 by =
+                            it*it*it*y0 +
+                            3.0f*it*it*t*y1 +
+                            3.0f*it*t*t*y2 +
+                            t*t*t*y3;
+
+                        i32 nx_tw = twips_from_pixels(bx);
+                        i32 ny_tw = twips_from_pixels(by);
+
+                        i32 dx = nx_tw - last_x_tw;
+                        i32 dy = ny_tw - last_y_tw;
+
+                        swf_bw_push_bit(&bw, 1);
+                        swf_bw_push_bit(&bw, 1);
+
+                        {
+                            u32 nx = swf_sbits_width(dx);
+                            u32 ny = swf_sbits_width(dy);
+                            u32 n = (nx > ny) ? nx : ny;
+                            if (n < 2) n = 2;
+                            if (n > 31) n = 31;
+
+                            swf_bw_push_ubits(&bw, n - 2, 4);
+                            swf_bw_push_bit(&bw, 1);
+                            swf_bw_push_sbits(&bw, dx, n);
+                            swf_bw_push_sbits(&bw, dy, n);
+                        }
+
+                        last_x_tw = nx_tw;
+                        last_y_tw = ny_tw;
+                    }
+
+                    cur_x = x3;
+                    cur_y = y3;
+                }
+            } else if (cmd == 'Z' || cmd == 'z') {
+                assert(have_point);
+
+                {
+                    i32 sx_tw = twips_from_pixels(sub_x);
+                    i32 sy_tw = twips_from_pixels(sub_y);
+
+                    if (sx_tw != last_x_tw || sy_tw != last_y_tw) {
+                        i32 dx = sx_tw - last_x_tw;
+                        i32 dy = sy_tw - last_y_tw;
+
+                        swf_bw_push_bit(&bw, 1);
+                        swf_bw_push_bit(&bw, 1);
+
+                        {
+                            u32 nx = swf_sbits_width(dx);
+                            u32 ny = swf_sbits_width(dy);
+                            u32 n = (nx > ny) ? nx : ny;
+                            if (n < 2) n = 2;
+                            if (n > 31) n = 31;
+
+                            swf_bw_push_ubits(&bw, n - 2, 4);
+                            swf_bw_push_bit(&bw, 1);
+                            swf_bw_push_sbits(&bw, dx, n);
+                            swf_bw_push_sbits(&bw, dy, n);
+                        }
+
+                        last_x_tw = sx_tw;
+                        last_y_tw = sy_tw;
+                    }
+                }
+
+                cur_x = sub_x;
+                cur_y = sub_y;
+            } else {
+                assert(!"unsupported SVG path command");
+            }
+        }
+    } else if (part.kind == SVG_Part_Kind_RECT) {
         i32 x0 = twips_from_pixels(part.rect.position.x);
         i32 y0 = twips_from_pixels(part.rect.position.y);
         i32 w  = twips_from_pixels(part.rect.size.x);
@@ -459,9 +758,11 @@ static void program(void) {
                         if (key.type == xml_Type_TAG_CLOSE) break;
 
                         if (string_equals(key_string, string("d"))) {
-                            log_info("TODO(felix): PATH unimplemented");
+                            part.path.d = value_string;
                         }
                     }
+
+                    assert(part.path.d.count != 0);
                 } break;
                 case 'e': {
                     part.kind = SVG_Part_Kind_ELLIPSE;
@@ -530,7 +831,211 @@ static void program(void) {
 
         switch (part->kind) {
             case SVG_Part_Kind_PATH: {
-                log_info("TODO(felix): PATH unimplemented");
+                assert(next_shape_id != 0);
+                assert(next_depth != 0);
+
+                u16 shape_id = next_shape_id++;
+                u16 depth = next_depth++;
+
+                String d = part->path.d;
+                assert(d.count != 0);
+
+                u64 j = 0;
+                u8 cmd = 0;
+
+                f32 cur_x = 0, cur_y = 0;
+                f32 sub_x = 0, sub_y = 0;
+                bool have_point = false;
+
+                i32 min_x_tw =  0x7fffffff;
+                i32 min_y_tw =  0x7fffffff;
+                i32 max_x_tw = -0x7fffffff;
+                i32 max_y_tw = -0x7fffffff;
+
+                while (j < d.count) {
+                    svg_path_skip(d, &j);
+                    if (j >= d.count) break;
+
+                    if (svg_path_is_cmd(d.data[j])) {
+                        cmd = d.data[j];
+                        j += 1;
+                    } else {
+                        assert(cmd != 0);
+                    }
+
+                    if (cmd == 'M' || cmd == 'm') {
+                        f32 x = svg_path_read_f32(d, &j);
+                        f32 y = svg_path_read_f32(d, &j);
+
+                        if (cmd == 'm' && have_point) { x += cur_x; y += cur_y; }
+
+                        cur_x = x; cur_y = y;
+                        sub_x = x; sub_y = y;
+                        have_point = true;
+
+                        {
+                            i32 xt = twips_from_pixels(cur_x);
+                            i32 yt = twips_from_pixels(cur_y);
+                            if (xt < min_x_tw) min_x_tw = xt;
+                            if (yt < min_y_tw) min_y_tw = yt;
+                            if (xt > max_x_tw) max_x_tw = xt;
+                            if (yt > max_y_tw) max_y_tw = yt;
+                        }
+
+                        while (1) {
+                            svg_path_skip(d, &j);
+                            if (j >= d.count) break;
+                            if (svg_path_is_cmd(d.data[j])) break;
+
+                            f32 lx = svg_path_read_f32(d, &j);
+                            f32 ly = svg_path_read_f32(d, &j);
+                            if (cmd == 'm') { lx += cur_x; ly += cur_y; }
+
+                            cur_x = lx; cur_y = ly;
+
+                            {
+                                i32 xt = twips_from_pixels(cur_x);
+                                i32 yt = twips_from_pixels(cur_y);
+                                if (xt < min_x_tw) min_x_tw = xt;
+                                if (yt < min_y_tw) min_y_tw = yt;
+                                if (xt > max_x_tw) max_x_tw = xt;
+                                if (yt > max_y_tw) max_y_tw = yt;
+                            }
+                        }
+                    } else if (cmd == 'L' || cmd == 'l') {
+                        assert(have_point);
+
+                        while (1) {
+                            svg_path_skip(d, &j);
+                            if (j >= d.count) break;
+                            if (svg_path_is_cmd(d.data[j])) break;
+
+                            f32 x = svg_path_read_f32(d, &j);
+                            f32 y = svg_path_read_f32(d, &j);
+                            if (cmd == 'l') { x += cur_x; y += cur_y; }
+
+                            cur_x = x; cur_y = y;
+
+                            {
+                                i32 xt = twips_from_pixels(cur_x);
+                                i32 yt = twips_from_pixels(cur_y);
+                                if (xt < min_x_tw) min_x_tw = xt;
+                                if (yt < min_y_tw) min_y_tw = yt;
+                                if (xt > max_x_tw) max_x_tw = xt;
+                                if (yt > max_y_tw) max_y_tw = yt;
+                            }
+                        }
+                    } else if (cmd == 'C' || cmd == 'c') {
+                        assert(have_point);
+
+                        while (1) {
+                            svg_path_skip(d, &j);
+                            if (j >= d.count) break;
+                            if (svg_path_is_cmd(d.data[j])) break;
+
+                            f32 x1 = svg_path_read_f32(d, &j);
+                            f32 y1 = svg_path_read_f32(d, &j);
+                            f32 x2 = svg_path_read_f32(d, &j);
+                            f32 y2 = svg_path_read_f32(d, &j);
+                            f32 x3 = svg_path_read_f32(d, &j);
+                            f32 y3 = svg_path_read_f32(d, &j);
+
+                            if (cmd == 'c') {
+                                x1 += cur_x; y1 += cur_y;
+                                x2 += cur_x; y2 += cur_y;
+                                x3 += cur_x; y3 += cur_y;
+                            }
+
+                            f32 x0 = cur_x;
+                            f32 y0 = cur_y;
+
+                            u32 segments = 16;
+                            for (u32 s = 0; s <= segments; s += 1) {
+                                f32 t = (f32)s / (f32)segments;
+                                f32 it = 1.0f - t;
+
+                                f32 bx =
+                                    it*it*it*x0 +
+                                    3.0f*it*it*t*x1 +
+                                    3.0f*it*t*t*x2 +
+                                    t*t*t*x3;
+
+                                f32 by =
+                                    it*it*it*y0 +
+                                    3.0f*it*it*t*y1 +
+                                    3.0f*it*t*t*y2 +
+                                    t*t*t*y3;
+
+                                i32 xt = twips_from_pixels(bx);
+                                i32 yt = twips_from_pixels(by);
+
+                                if (xt < min_x_tw) min_x_tw = xt;
+                                if (yt < min_y_tw) min_y_tw = yt;
+                                if (xt > max_x_tw) max_x_tw = xt;
+                                if (yt > max_y_tw) max_y_tw = yt;
+                            }
+
+                            cur_x = x3;
+                            cur_y = y3;
+                        }
+                    } else if (cmd == 'Z' || cmd == 'z') {
+                        assert(have_point);
+
+                        {
+                            i32 xt = twips_from_pixels(sub_x);
+                            i32 yt = twips_from_pixels(sub_y);
+
+                            if (xt < min_x_tw) min_x_tw = xt;
+                            if (yt < min_y_tw) min_y_tw = yt;
+                            if (xt > max_x_tw) max_x_tw = xt;
+                            if (yt > max_y_tw) max_y_tw = yt;
+                        }
+
+                        cur_x = sub_x;
+                        cur_y = sub_y;
+                    } else {
+                        assert(!"unsupported SVG path command");
+                    }
+                }
+
+                assert(min_x_tw <= max_x_tw);
+                assert(min_y_tw <= max_y_tw);
+
+                assert(min_x_tw >= -(1<<14) && min_x_tw < (1<<14));
+                assert(max_x_tw >= -(1<<14) && max_x_tw < (1<<14));
+                assert(min_y_tw >= -(1<<14) && min_y_tw < (1<<14));
+                assert(max_y_tw >= -(1<<14) && max_y_tw < (1<<14));
+
+                SWF_Rect shape_bounds = swf_rect((i16)min_x_tw, (i16)max_x_tw, (i16)min_y_tw, (i16)max_y_tw);
+
+                SWF_Shape_With_Style shapes = {0};
+                shapes.fill_style.type = 0;
+                shapes.fill_style.color = part->fill_rgba;
+
+                {
+                    i32 stroke_twips = twips_from_pixels(part->stroke_width);
+                    if (stroke_twips < 0) stroke_twips = 0;
+                    assert(stroke_twips <= 0xffff);
+                    shapes.line_style.width_twips = (u16)stroke_twips;
+                }
+                shapes.line_style.color = (part->fill_rgba != 0) ? part->fill_rgba : 0x000000ff;
+
+                swf_push_defineshape3(&swf, shape_id, shape_bounds, shapes, *part);
+
+                {
+                    u16 body_length = 1 + 2 + 2 + 1;
+                    u16 tag_code_and_length = (u16)((SWF_Tag_Type_PLACEOBJECT2 << 6) | body_length);
+                    swf_write_u16(&swf, tag_code_and_length);
+
+                    u8 flags = 0;
+                    flags |= (1u << 2);
+                    flags |= (1u << 1);
+                    push(&swf, flags);
+
+                    swf_write_u16(&swf, depth);
+                    swf_write_u16(&swf, shape_id);
+                    push(&swf, 0);
+                }
             } break;
             case SVG_Part_Kind_ELLIPSE: {
                 assert(next_shape_id != 0);
