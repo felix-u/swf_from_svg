@@ -30,6 +30,8 @@ On macOS, run `build_releases.sh` (you might have to `chmod +x` first). You need
 
 ### Debug mode
 
+Debug binaries will be output to `build/sfs.exe` (or `.bin` on macOS).
+
 On windows, run `build.bat`. You need the MSVC toolchain.
 
 On macOS, run `build.sh` (you might have to `chmod +x` first). You need clang.
