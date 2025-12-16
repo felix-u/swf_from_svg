@@ -1182,7 +1182,8 @@ static void program(void) {
     swf_write_u16(&swf, (u16)((SWF_Tag_Type_SHOWFRAME << 6) | 0));
     swf_write_u16(&swf, (u16)((SWF_Tag_Type_END << 6) | 0));
 
-    if (BUILD_DEBUG) {
+    bool output_official_example = false;
+    if (BUILD_DEBUG && output_official_example) {
         // NOTE(felix): this is a known valid SWF file given in the spec Appendix A
         const char *path = "official_example.swf";
         if (!os_file_info(path).exists) {

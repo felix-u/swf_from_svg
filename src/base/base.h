@@ -52,6 +52,7 @@
     extern int errno;
     #include <sys/wait.h>
 #elif BASE_OS == BASE_OS_WINDOWS
+    #define static_assert _Static_assert
     #define WIN32_LEAN_AND_MEAN
     #define VC_EXTRALEAN
     #define os_abort() ExitProcess(1)
@@ -59,8 +60,8 @@
     #define NOGDI
     #define NOUSER
     #define NOMINMAX
-    #include "windows.h"
-    #include "shellapi.h"
+    #include <windows.h>
+    #include <shellapi.h>
     #define _CRT_SECURE_NO_WARNINGS
 #endif // OS
 
