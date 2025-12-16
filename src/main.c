@@ -538,7 +538,7 @@ static void swf_push_shapewithstyle(String_Builder *swf, SWF_Shape_With_Style sh
                 cur_x = sub_x;
                 cur_y = sub_y;
             } else {
-                assert(!"unsupported SVG path command");
+                panic("unsupported SVG path command");
             }
         }
     } else if (part.kind == SVG_Part_Kind_RECT) {
@@ -1036,7 +1036,7 @@ static void program(void) {
                         cur_x = sub_x;
                         cur_y = sub_y;
                     } else {
-                        assert(!"unsupported SVG path command");
+                        panic("unsupported SVG path command");
                     }
                 }
 

@@ -24,9 +24,9 @@ path/to/sfs path/to/input.svg path/to/output.swf
 
 ### Release mode
 
-On Windows, run `build_release.bat`. You need clang to compile for windows and zig to cross-compile for macos.
+On Windows, run `build_releases.bat`. You need clang to compile for windows and zig to cross-compile for macos.
 
-On macOS, run `build_release.sh` (you might have to `chmod +x` first). You need zig.
+On macOS, run `build_releases.sh` (you might have to `chmod +x` first). You need zig.
 
 ### Debug mode
 

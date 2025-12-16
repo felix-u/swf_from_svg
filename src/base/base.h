@@ -2352,16 +2352,16 @@ static String build_compiler_link_flags[Build_Compiler_COUNT][BASE_OS_COUNT][BUI
         string_constant("-fixed"),
         string_constant("libucrtd.lib"),
     } },
-    [Build_Compiler_CLANG] = {
-        [BASE_OS_MACOS] = {
-            string_constant("-framework"), string_constant("CoreFoundation"),
-            string_constant("-framework"), string_constant("Metal"),
-            string_constant("-framework"), string_constant("Cocoa"),
-            string_constant("-framework"), string_constant("Metalkit"),
-            string_constant("-framework"), string_constant("Quartz"),
-            string_constant("-framework"), string_constant("AudioToolbox"),
-        },
-    },
+    // [Build_Compiler_CLANG] = {
+    //     [BASE_OS_MACOS] = {
+    //         string_constant("-framework"), string_constant("CoreFoundation"),
+    //         string_constant("-framework"), string_constant("Metal"),
+    //         string_constant("-framework"), string_constant("Cocoa"),
+    //         string_constant("-framework"), string_constant("Metalkit"),
+    //         string_constant("-framework"), string_constant("Quartz"),
+    //         string_constant("-framework"), string_constant("AudioToolbox"),
+    //     },
+    // },
     [Build_Compiler_EMCC] = { [BASE_OS_EMSCRIPTEN] = {
         string_constant("-sUSE_WEBGL2=1"),
         // string_constant("--use-port=emdawnwebgpu"),
