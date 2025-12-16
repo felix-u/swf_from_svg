@@ -29,20 +29,20 @@ static i32 twips_from_pixels(f32 pixels) {
     return result;
 }
 
-structdef(SWF_Rect) { u8 bytes[17]; };
-static SWF_Rect swf_rect(i32 x_min, i32 x_max, i32 y_min, i32 y_max) {
+structdef(SWF_Rect) { u8 bytes[9]; };
+static SWF_Rect swf_rect(i16 x_min, i16 x_max, i16 y_min, i16 y_max) {
     SWF_Rect rect = {0};
     u8 *r = rect.bytes;
 
-    u8 bits_per_field = 31;
+    u8 bits_per_field = 15;
     assert(bits_per_field <= 31);
     r[0] |= bits_per_field << 3;
 
-    i32 values[4] = { x_min, x_max, y_min, y_max };
+    i16 values[4] = { x_min, x_max, y_min, y_max };
 
     u64 r_bit = 5;
     for (u64 value_index = 0; value_index < 4; value_index += 1) {
-        u32 unsigned_value = bit_cast(u32) values[value_index];
+        u16 unsigned_value = bit_cast(u16) values[value_index];
         for (i32 bit = bits_per_field - 1; bit >= 0; bit -= 1, r_bit += 1) {
             u64 r_byte = r_bit >> 3;
             u64 r_bit_in_byte = 7 - (r_bit & 7);
@@ -129,8 +129,6 @@ static void svg_part_parse_style(SVG_Part *part, String style) {
         part->stroke_width = (f32)f64_from_string(stroke_width_string);
     }
 }
-
-typedef u16 SWF_Record_Header;
 
 static void swf_write_u16(String_Builder *swf, u16 value) {
     push(swf, (u8)value);
@@ -303,12 +301,6 @@ static void swf_push_shapewithstyle(String_Builder *swf, SWF_Shape_With_Style sh
 
         swf_bw_byte_align(&bw);
     }
-
-    // TODO(felix): StyleChangeRecord: select fill & line styles, move to x0,y0
-
-    // TODO(felix): 4 StraightEdgeRecord s: to x1,y0, then x1,y1, then x0,y1, then back to x0,y0
-
-    // TODO(felix): EndShapeRecord
 }
 
 static void swf_push_defineshape3(String_Builder *swf, u16 shape_id, SWF_Rect shape_bounds, SWF_Shape_With_Style shapes, SVG_Part part) {
@@ -454,13 +446,13 @@ static void program(void) {
         "WS" // signature bytes
         "\x06" // single-byte version (6)
         "0000" // [u32] length of file in bytes, including this header (filled later)
-        "00001000200030004" // [RECT] frame size, 17 bytes = 5 bits + 32 bits x 4 values, padded to the next full byte (filled later)
-        "\x01\0" // [u16] framerate (1)
-        "\x01\0" // [u16] frame count (1)
+        "010203040" // [RECT] frame size, 9 bytes = 5 bits + 15 bits x 4 values, padded to the next full byte (filled later)
     );
+    swf_write_u16(&swf, 0x0c00); // framerate
+    swf_write_u16(&swf, 1); // frame count
 
     u8 *frame_size_rect_in_header = &swf.data[8];
-    SWF_Rect frame_size = swf_rect(0, twips_from_pixels(svg_width), 0, twips_from_pixels(svg_height));
+    SWF_Rect frame_size = swf_rect(0, (i16)twips_from_pixels(svg_width), 0, (i16)twips_from_pixels(svg_height));
     assert((frame_size.bytes[0] >> 3) != 0);
     memcpy(frame_size_rect_in_header, frame_size.bytes, sizeof frame_size.bytes);
 
@@ -488,7 +480,7 @@ static void program(void) {
                 i32 x1 = x0 + twips_from_pixels(part->rect.size.x);
                 i32 y1 = y0 + twips_from_pixels(part->rect.size.y);
 
-                SWF_Rect shape_bounds = swf_rect(x0, x1, y0, y1);
+                SWF_Rect shape_bounds = swf_rect((i16)x0, (i16)x1, (i16)y0, (i16)y1);
 
                 SWF_Shape_With_Style shapes = {0};
                 shapes.fill_style.type = 0;
