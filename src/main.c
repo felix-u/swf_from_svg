@@ -231,15 +231,13 @@ static void swf_push_shapewithstyle(String_Builder *swf, SWF_Shape_With_Style sh
 
     push(swf, 0x11); // NumFillBits=1 (high nibble), NumLineBits=1 (low nibble)
 
-    assert(part.kind == SVG_Part_Kind_RECT);
+    SWF_Bit_Writer bw = { .swf = swf };
 
-    {
+    if (part.kind == SVG_Part_Kind_RECT) {
         i32 x0 = twips_from_pixels(part.rect.position.x);
         i32 y0 = twips_from_pixels(part.rect.position.y);
         i32 w  = twips_from_pixels(part.rect.size.x);
         i32 h  = twips_from_pixels(part.rect.size.y);
-
-        SWF_Bit_Writer bw = { .swf = swf, .byte = 0, .bit_count = 0 };
 
         /* StyleChangeRecord: MoveTo + FillStyle0=1 + LineStyle=1 */
         swf_bw_push_bit(&bw, 0); /* TypeFlag: non-edge */
@@ -294,13 +292,82 @@ static void swf_push_shapewithstyle(String_Builder *swf, SWF_Shape_With_Style sh
                 }
             }
         }
+    } else {
+        assert(part.kind == SVG_Part_Kind_ELLIPSE);
 
-        /* EndShapeRecord: 0 + five 0 flags */
+        i32 cx = twips_from_pixels(part.ellipse.centre.x);
+        i32 cy = twips_from_pixels(part.ellipse.centre.y);
+        i32 rx = twips_from_pixels(part.ellipse.radius.x);
+        i32 ry = twips_from_pixels(part.ellipse.radius.y);
+
+        assert(rx >= 0 && ry >= 0);
+
+        /* Polyline approximation: 32 segments */
+        u32 segments = 32;
+        assert((segments & (segments - 1)) == 0);
+
+        i32 px0 = cx + rx;
+        i32 py0 = cy;
+
+        /* StyleChangeRecord: MoveTo + FillStyle0=1 + LineStyle=1 */
         swf_bw_push_bit(&bw, 0);
-        swf_bw_push_ubits(&bw, 0, 5);
+        swf_bw_push_bit(&bw, 0);
+        swf_bw_push_bit(&bw, 1);
+        swf_bw_push_bit(&bw, 0);
+        swf_bw_push_bit(&bw, 1);
+        swf_bw_push_bit(&bw, 1);
 
-        swf_bw_byte_align(&bw);
+        {
+            u32 mx = swf_sbits_width(px0);
+            u32 my = swf_sbits_width(py0);
+            u32 move_bits = (mx > my) ? mx : my;
+            if (move_bits < 1) move_bits = 1;
+            if (move_bits > 31) move_bits = 31;
+
+            swf_bw_push_ubits(&bw, move_bits, 5);
+            swf_bw_push_sbits(&bw, px0, move_bits);
+            swf_bw_push_sbits(&bw, py0, move_bits);
+        }
+
+        swf_bw_push_ubits(&bw, 1, 1);
+        swf_bw_push_ubits(&bw, 1, 1);
+
+        i32 prev_x = px0;
+        i32 prev_y = py0;
+
+        for (u32 s = 1; s <= segments; s += 1) {
+            f32 t = (f32)s * (6.2831853071795864769f / (f32)segments);
+            i32 x = cx + (i32)((f32)rx * cosf(t) + (rx >= 0 ? 0.5f : -0.5f));
+            i32 y = cy + (i32)((f32)ry * sinf(t) + (ry >= 0 ? 0.5f : -0.5f));
+
+            i32 dx = x - prev_x;
+            i32 dy = y - prev_y;
+
+            swf_bw_push_bit(&bw, 1);
+            swf_bw_push_bit(&bw, 1);
+
+            {
+                u32 nx = swf_sbits_width(dx);
+                u32 ny = swf_sbits_width(dy);
+                u32 n = (nx > ny) ? nx : ny;
+                if (n < 2) n = 2;
+                if (n > 31) n = 31;
+
+                swf_bw_push_ubits(&bw, n - 2, 4);
+                swf_bw_push_bit(&bw, 1); /* GeneralLineFlag */
+                swf_bw_push_sbits(&bw, dx, n);
+                swf_bw_push_sbits(&bw, dy, n);
+            }
+
+            prev_x = x;
+            prev_y = y;
+        }
     }
+
+    /* EndShapeRecord: 0 + five 0 flags */
+    swf_bw_push_bit(&bw, 0);
+    swf_bw_push_ubits(&bw, 0, 5);
+    swf_bw_byte_align(&bw);
 }
 
 static void swf_push_defineshape3(String_Builder *swf, u16 shape_id, SWF_Rect shape_bounds, SWF_Shape_With_Style shapes, SVG_Part part) {
@@ -409,10 +476,10 @@ static void program(void) {
                         else if (string_equals(key_string, string("ry"))) ry_string = value_string;
                     }
 
-                    part.ellipse.centre.x = (f32)f64_from_string(rx_string);
-                    part.ellipse.centre.y = (f32)f64_from_string(ry_string);
-                    part.ellipse.radius.x = (f32)f64_from_string(cx_string);
-                    part.ellipse.radius.y = (f32)f64_from_string(cy_string);
+                    part.ellipse.centre.x = (f32)f64_from_string(cx_string);
+                    part.ellipse.centre.y = (f32)f64_from_string(cy_string);
+                    part.ellipse.radius.x = (f32)f64_from_string(rx_string);
+                    part.ellipse.radius.y = (f32)f64_from_string(ry_string);
                 } break;
                 case 'r': {
                     part.kind = SVG_Part_Kind_RECT;
@@ -466,7 +533,57 @@ static void program(void) {
                 log_info("TODO(felix): PATH unimplemented");
             } break;
             case SVG_Part_Kind_ELLIPSE: {
-                log_info("TODO(felix): ELLIPSE unimplemented");
+                assert(next_shape_id != 0);
+                assert(next_depth != 0);
+
+                u16 shape_id = next_shape_id++;
+                u16 depth = next_depth++;
+
+                i32 cx = twips_from_pixels(part->ellipse.centre.x);
+                i32 cy = twips_from_pixels(part->ellipse.centre.y);
+                i32 rx = twips_from_pixels(part->ellipse.radius.x);
+                i32 ry = twips_from_pixels(part->ellipse.radius.y);
+
+                i32 x0 = cx - rx;
+                i32 y0 = cy - ry;
+                i32 x1 = cx + rx;
+                i32 y1 = cy + ry;
+
+                assert(x0 >= -(1<<14) && x0 < (1<<14));
+                assert(x1 >= -(1<<14) && x1 < (1<<14));
+                assert(y0 >= -(1<<14) && y0 < (1<<14));
+                assert(y1 >= -(1<<14) && y1 < (1<<14));
+
+                SWF_Rect shape_bounds = swf_rect((i16)x0, (i16)x1, (i16)y0, (i16)y1);
+
+                SWF_Shape_With_Style shapes = {0};
+                shapes.fill_style.type = 0;
+                shapes.fill_style.color = part->fill_rgba;
+
+                {
+                    i32 stroke_twips = twips_from_pixels(part->stroke_width);
+                    if (stroke_twips < 0) stroke_twips = 0;
+                    assert(stroke_twips <= 0xffff);
+                    shapes.line_style.width_twips = (u16)stroke_twips;
+                }
+                shapes.line_style.color = (part->fill_rgba != 0) ? part->fill_rgba : 0x000000ff;
+
+                swf_push_defineshape3(&swf, shape_id, shape_bounds, shapes, *part);
+
+                {
+                    u16 body_length = 1 + 2 + 2 + 1;
+                    u16 tag_code_and_length = (u16)((SWF_Tag_Type_PLACEOBJECT2 << 6) | body_length);
+                    swf_write_u16(&swf, tag_code_and_length);
+
+                    u8 flags = 0;
+                    flags |= (1u << 2);
+                    flags |= (1u << 1);
+                    push(&swf, flags);
+
+                    swf_write_u16(&swf, depth);
+                    swf_write_u16(&swf, shape_id);
+                    push(&swf, 0);
+                }
             } break;
             case SVG_Part_Kind_RECT: {
                 assert(next_shape_id != 0);
